@@ -1,0 +1,54 @@
+# Indexing-pipeline config (scripts/pipeline/, inspect/, diagnostics/, ops/).
+# The RAG-serving stage has its own scripts/rag/config.toml, which deliberately
+# overrides the LLM and the Milvus collection. If you edit the shared keys
+# ([cleyrop], [project], [embedding]), keep both files in sync.
+
+[cleyrop]
+domain = "asnr-secnum.cleyrop.net"
+
+[project]
+id = "00000000-0000-0000-0000-000000000000"   # your Cleyrop project id
+
+[llm]
+proxy_prefix = "http://ai-gen-proxy.cleyrop.svc.cluster.local"
+model_key = "gpt-oss-120b"
+max_tokens = 2048
+timeout = 120.0
+
+[milvus]
+uri = "http://milvus.cleyrop.svc.cluster.local:19530"
+collection = "documents_vectorises"
+collection_brut = "documents_vectorises_brut"
+
+[embedding]
+model_key = "BAAI/bge-m3"
+dim = 1024
+batch_size = 32
+
+[embedding_fermi]
+encoder_url = "http://127.0.0.1:8000"           # empty = inline local loading (no server)
+model_id = "atomic-canyon/fermi-1024"          # sparse SPLADE model, local inference (CPU)
+collection = "documents_vectorises_fermi"       # dedicated sparse collection
+source_collection = "documents_vectorises"      # docling chunks reused as-is
+batch_size = 16                                  # encoding batch size (CPU)
+max_seq_len = 1024                               # fermi max context length
+
+[fragus]
+# Target collections with 3 vector fields (dense bge-m3 + sparse_bm25 + sparse_fermi),
+# built by joining the existing collections on chunk_id (see build_fragus_collection.py).
+collection_baseline = "baseline_fragus"           # docling
+collection_brut = "brut_fragus"                   # raw pypdf
+# baseline sources (docling)
+baseline_dense = "documents_vectorises"           # carries the dense bge-m3 field
+baseline_fermi = "documents_vectorises_fermi"     # carries the sparse fermi field
+# raw sources (pypdf) — raw fermi TO BE COMPUTED before building brut_fragus
+brut_dense = "documents_vectorises_brut"
+brut_fermi = "documents_vectorises_brut_fermi"
+bm25_language = "fr"                              # pymilvus.model analyzer (build_default_analyzer)
+bm25_state_dir = "artifacts/bm25"                 # persisted fit state (idf+avgdl), shared to encode queries
+
+[chunking_brut]
+extractor = "pypdf"   # raw native-text extraction, no OCR
+chunk_tokens = 500    # token window size (bge-m3)
+overlap_tokens = 100  # overlap between consecutive windows
+min_chunk_chars = 20  # reject tail windows that are too short

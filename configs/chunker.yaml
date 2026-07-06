@@ -1,0 +1,41 @@
+chunker:
+  # HybridChunker on docling-serve
+  type: "hybrid"               # "hybrid", "hierarchical", "raw" or "pymupdf"
+  tokenizer: "BAAI/bge-m3"    # HuggingFace model used for token counting
+  max_tokens: 512              # BAAI recommendation for bge-m3 in RAG retrieval
+  hard_cap_tokens: 1024        # safety net: re-split any chunk above this threshold (docling-core bug #119)
+  merge_peers: true            # merge consecutive chunks that are too short
+  include_raw_text: true       # return the raw body (avoids double contextualization)
+  raw:
+    chunk_size: 1000           # characters per chunk ("raw" mode)
+    overlap: 100               # overlapping characters between chunks
+  pymupdf:
+    max_chars: 4000            # max chunk size ("pymupdf" mode)
+    min_chars: 200             # merge threshold for short sections
+
+pipeline:
+  # Options forwarded to the docling-serve server — "max quality" mode
+  do_ocr: true
+  ocr_preset: "rapidocr"
+  do_table_structure: true
+  include_images: false        # images are useless for RAG chunking
+  table_mode: "accurate"       # TableFormer "accurate": complex tables, slower
+  pdf_backend: "docling_parse" # native Docling backend, best layout analysis
+  do_formula_enrichment: true  # LaTeX extraction of formulas
+  do_code_enrichment: true     # better-structured code blocks
+
+processing:
+  min_chunk_length: 20
+  chunk_timeout: 300           # seconds per document (Future.result timeout)
+  workers: 1                   # parallel workers, overridable with --workers N
+
+storage:
+  chunks_folder: "corpus_chunks"   # destination Cleyrop folder for the JSONL files
+
+convert:
+  docling_docs_folder: "docling_docs"   # Cleyrop folder for the DoclingDocument JSON files
+  convert_timeout: 7200                 # seconds per document (Future.result timeout)
+
+# Environment variables expected in .env:
+#   DOCLING_SERVICE_URL  → URL of the docling-serve service
+#   DOCLING_SERVICE_API_KEY (optional)

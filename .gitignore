@@ -1,0 +1,46 @@
+# Env
+.env
+.env.*
+!.env.example
+
+# uv / Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.python-version
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# Output
+output/
+
+# Logs & crash dumps
+logs/
+core
+core.*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Data (raw inputs, caches, embeddings — too large or regenerable)
+*data/
+
+# Generated pipeline state (BM25 fit state, regenerable via build_fragus_collection.py)
+artifacts/
+
+# Evaluation datasets and results (corpus-derived content, not published).
+# Only the README documenting the dataset schema is versioned.
+!scripts/rag_evaluation/data/
+scripts/rag_evaluation/data/*
+!scripts/rag_evaluation/data/README.md

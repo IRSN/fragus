@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.cleyrop.reranker.tunnel</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>__SERVER_DIR__/run_tunnel.sh</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>__SERVER_DIR__</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <!-- Target VM: override here if it is not the default ~/.ssh/config alias -->
+    <key>RERANKER_TUNNEL_HOST</key>
+    <string>cleyrop-asnr-secnum-devspace</string>
+  </dict>
+
+  <!-- Starts at login; autossh handles its own reconnections,
+       KeepAlive restarts it if it dies completely -->
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+
+  <key>ProcessType</key>
+  <string>Background</string>
+
+  <key>StandardOutPath</key>
+  <string>__SERVER_DIR__/logs/tunnel.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>__SERVER_DIR__/logs/tunnel.err.log</string>
+</dict>
+</plist>

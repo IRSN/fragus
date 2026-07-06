@@ -1,0 +1,25 @@
+# RAG-serving config, read by hybrid_rag_pipeline.py and graph_rag_pipeline.py.
+# Deliberately diverges from the root config.toml (indexing pipeline): different
+# LLM ([llm].model_key) and Milvus collection ([milvus].collection). If you edit
+# the shared keys ([cleyrop], [project], [embedding]), keep both files in sync.
+
+[cleyrop]
+domain = "asnr-secnum.cleyrop.net"
+
+[project]
+id = "00000000-0000-0000-0000-000000000000"   # your Cleyrop project id
+
+[llm]
+proxy_prefix = "http://ai-gen-proxy.cleyrop.svc.cluster.local"
+model_key = "mistral-large-latest"
+max_tokens = 2048
+timeout = 120.0
+
+[milvus]
+uri = "http://milvus.cleyrop.svc.cluster.local:19530"
+collection = "baseline_fragus"
+
+[embedding]
+model_key = "BAAI/bge-m3"
+dim = 1024
+batch_size = 32

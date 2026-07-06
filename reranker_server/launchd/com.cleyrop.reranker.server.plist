@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.cleyrop.reranker.server</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>__SERVER_DIR__/run_server.sh</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>__SERVER_DIR__</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+
+  <!-- Starts at login and restarts automatically on crash -->
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+
+  <!-- Low QoS: the server does not take precedence over your interactive usage -->
+  <key>ProcessType</key>
+  <string>Background</string>
+
+  <key>StandardOutPath</key>
+  <string>__SERVER_DIR__/logs/server.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>__SERVER_DIR__/logs/server.err.log</string>
+</dict>
+</plist>
