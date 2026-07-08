@@ -602,7 +602,7 @@ wheels = [
 ]
 
 [[package]]
-name = "fragus"
+name = "fragus-iago"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
@@ -612,6 +612,8 @@ dependencies = [
     { name = "ipykernel", marker = "sys_platform == 'linux'" },
     { name = "langchain-core", marker = "sys_platform == 'linux'" },
     { name = "langchain-openai", marker = "sys_platform == 'linux'" },
+    { name = "neo4j", marker = "sys_platform == 'linux'" },
+    { name = "neo4j-graphrag", marker = "sys_platform == 'linux'" },
     { name = "nltk", marker = "sys_platform == 'linux'" },
     { name = "pymilvus", marker = "sys_platform == 'linux'" },
     { name = "pymilvus-model", marker = "sys_platform == 'linux'" },
@@ -619,6 +621,7 @@ dependencies = [
     { name = "pypdf", marker = "sys_platform == 'linux'" },
     { name = "python-dotenv", marker = "sys_platform == 'linux'" },
     { name = "pyyaml", marker = "sys_platform == 'linux'" },
+    { name = "ragas", marker = "sys_platform == 'linux'" },
     { name = "sentence-transformers", marker = "sys_platform == 'linux'" },
     { name = "torch", marker = "sys_platform == 'linux'" },
     { name = "torchvision", marker = "sys_platform == 'linux'" },
@@ -648,8 +651,10 @@ requires-dist = [
     { name = "langchain-core", specifier = ">=0.2.0" },
     { name = "langchain-openai", specifier = ">=0.2.0" },
     { name = "matplotlib", marker = "extra == 'eval'", specifier = ">=3.8" },
-    { name = "neo4j", marker = "extra == 'graph'", specifier = ">=6.2.0" },
-    { name = "neo4j-graphrag", marker = "extra == 'graph'", specifier = ">=1.18.0" },
+    { name = "neo4j", specifier = ">=6.2.0" },
+    { name = "neo4j", marker = "extra == 'graph'", specifier = ">=5.0" },
+    { name = "neo4j-graphrag", specifier = ">=1.18.0" },
+    { name = "neo4j-graphrag", marker = "extra == 'graph'", specifier = ">=1.0" },
     { name = "nest-asyncio", marker = "extra == 'eval'", specifier = ">=1.5" },
     { name = "nltk", specifier = ">=3.9.1" },
     { name = "numpy", marker = "extra == 'eval'", specifier = ">=1.24" },
@@ -661,7 +666,8 @@ requires-dist = [
     { name = "pypdf", specifier = ">=4.0" },
     { name = "python-dotenv", specifier = ">=1.0.0" },
     { name = "pyyaml", specifier = ">=6.0" },
-    { name = "ragas", marker = "extra == 'eval'", specifier = ">=0.4.3" },
+    { name = "ragas", specifier = ">=0.4.3" },
+    { name = "ragas", marker = "extra == 'eval'", specifier = ">=0.2.0" },
     { name = "scipy", marker = "extra == 'eval'", specifier = ">=1.11" },
     { name = "sentence-transformers", specifier = ">=5.5.1" },
     { name = "torch", index = "https://download.pytorch.org/whl/cpu" },

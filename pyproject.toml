@@ -1,5 +1,5 @@
 [project]
-name = "fragus"
+name = "fragus-iago"
 version = "0.1.0"
 requires-python = ">=3.13,<3.14"
 dependencies = [
@@ -15,22 +15,25 @@ dependencies = [
     "pypdf>=4.0",
     "cryptography>=3.1",
     "pymupdf4llm>=0.0.17",
-    # torch declared explicitly to force the CPU variant (see tool.uv.sources):
-    # without a direct declaration the source does not apply to transitive deps (docling).
+    # torch déclaré explicitement pour forcer la variante CPU (cf. tool.uv.sources) :
+    # sans déclaration directe, la source ne s'applique pas aux deps transitives (docling).
     "torch",
     "torchvision",
-    # cross-encoder reranking (scripts/rag/hybrid_rag_pipeline.py, graph_rag_pipeline.py)
+    # reranker bench CPU (scripts/inspect/bench_reranker_cpu.py)
     "sentence-transformers>=5.5.1",
     "ipykernel>=7.2.0",
+    "neo4j>=6.2.0",
+    "neo4j-graphrag>=1.18.0",
+    "ragas>=0.4.3",
 ]
 
 [project.optional-dependencies]
 graph = [
-    "neo4j>=6.2.0",
-    "neo4j-graphrag>=1.18.0",
+    "neo4j>=5.0",
+    "neo4j-graphrag>=1.0",
 ]
 eval = [
-    "ragas>=0.4.3",
+    "ragas>=0.2.0",
     "pandas>=2.0",
     "numpy>=1.24",
     "openpyxl>=3.1",
@@ -49,7 +52,7 @@ url = "https://gitlab.com/api/v4/projects/79823225/packages/pypi/simple"
 explicit = true
 authenticate = "always"
 
-# No GPU on the target VM: CPU torch (avoids ~3.5 GB of useless CUDA/NVIDIA libs)
+# Pas de GPU sur cette VM : torch CPU (évite ~3,5 Go de libs CUDA/NVIDIA inutiles)
 [[tool.uv.index]]
 name = "pytorch-cpu"
 url = "https://download.pytorch.org/whl/cpu"
