@@ -87,6 +87,63 @@ The sparse fermi retriever is disabled by default (dense/BM25 weights 50/50).
 To enable it, start [`fermi_server/`](fermi_server/) and set
 `encoder_url` in the `[embedding_fermi]` section of the root `config.toml`.
 
+## GraphRAG pipeline (Neo4j)
+
+`scripts/rag/graph_rag_pipeline.py` exposes `GraphRAGPipeline`: a
+non-agentic variant of the RAG pipeline that queries a Neo4j knowledge graph
+instead of Milvus, with 3 retrieval modes:
+
+| Mode | Principle |
+|---|---|
+| `flat_rrf` | BGE-M3 ANN + BM25 Lucene → RRF fusion (k=60) → cross-encoder rerank → top-50. Deliberately ignores the graph structure — internal baseline equivalent to `dbf_rrf_top50` on the Milvus side, running on the Neo4j corpus. |
+| `hybrid_cypher` | BGE-M3 ANN (10 seeds) → 2-hop graph traversal to entities, then to linked chunks ("bridged", HippoRAG-inspired) → cross-encoder rerank → top-50. Targets passages connected through shared entities but not vectorially close. |
+| `text2cypher` | The LLM generates a Cypher query from the question and the graph schema (embedding-similarity pruning if the schema is too large); the raw results (≤50) form the context, with no reranking. |
+
+```python
+from scripts.rag.graph_rag_pipeline import GraphRAGPipeline
+
+# Flat baseline (equivalent to dbf_rrf_top50 on the Milvus side)
+rag = GraphRAGPipeline(mode="flat_rrf")
+
+# 2-hop entity traversal
+rag = GraphRAGPipeline(mode="hybrid_cypher", database="my_graph")
+
+# Cypher query generation (clean ontology recommended)
+rag = GraphRAGPipeline(mode="text2cypher", database="static_graph")
+
+result = rag.ask("Quels sont les critères d'agrément des colis de type B ?")
+print(result["answer"])
+rag.close()
+```
+
+Notable `GraphRAGPipeline` parameters:
+
+| Parameter | Default | Role |
+|---|---|---|
+| `mode` | `"hybrid_cypher"` | `"flat_rrf"` / `"hybrid_cypher"` / `"text2cypher"` |
+| `neo4j_url` / `database` | `bolt://localhost:7688` / `neo4j` | connection to the target graph |
+| `top_k` | `10` | ANN seeds for the traversal (`hybrid_cypher`) |
+| `traversal_limit` | `100` | pool size before reranking (`hybrid_cypher`) |
+| `candidates` / `top_n` / `rrf_k` | `100` / `50` / `60` | same as the Hybrid pipeline (`flat_rrf`) |
+| `prune_schema` / `schema_top_k` | `True` / `100` | embedding-similarity schema pruning before sending it to the LLM (`text2cypher`) — necessary once the schema exceeds the context window |
+
+The project compares two graphs built on the same corpus (~100 documents,
+basic chunking, no structured pre-processing such as Docling):
+- a **static** ontology, manually curated (entity and relation types from the
+  NEO ontology + LLM extraction over two reference IAEA glossaries — not
+  reviewed by a domain expert due to time constraints - 359 node types, 103 relation types);
+- a **dynamic** ontology, automatically extracted (5,718 node types, 5,527
+  relation types — a raw vocabulary more than an ontology).
+
+**Comparative study result** (5 runs, `docs/run_analysis_graph.md`): on this
+corpus, no mode exploiting the graph structure beats flat retrieval
+(`flat_rrf`), and `text2cypher` in particular is not viable as implemented
+(40 to 80% of questions receive an empty context, for lack of a fallback
+mechanism). The study's champion remains the Hybrid configuration
+`dbf_rrf_top50` (see `docs/run_analysis.md`). Run details and commands:
+[`docs/rag_runs_catalog.md`](docs/rag_runs_catalog.md).
+
+
 ## End-to-end RAG evaluation
 
 `scripts/rag_evaluation/` runs an evaluation campaign in 2 steps,
@@ -203,12 +260,12 @@ uv run python prepare_eval_dataset.py data/rag_evaluation_dataset.xlsx \
 
 ## Script tree
 
-| Folder | Role | Scripts |
+| Directory | Role | Scripts |
 |---|---|---|
-| `scripts/pipeline/` | ingestion chain | `build_manifest_fragus_clean`, `convert_corpus`, `chunk_corpus`, `embed_corpus`, `brute_corpus`, `embed_fermi`, `build_fragus_collection`, `_docling_client` |
-| `scripts/rag/` | answer generation | `hybrid_rag_pipeline` (class `HybridRAGPipeline`), `graph_rag_pipeline` |
-| `scripts/rag_evaluation/` | evaluation campaign | `prepare_eval_dataset`, `prepare_eval_dataset_graph`, `rag_evaluation`, `compare_rag_runs` |
-| `scripts/inspect/` | stats / visualization / exploration | `milvus_recap`, `chunk_stats`, `explore_chunks`, `explore_manifest`, `view_chunks`, `view_parsed`, `visualize_chunks`, `view_duplicates`, `av_audit` |
+| `scripts/pipeline/` | ingestion chain | `build_manifest_fragus_clean`, `convert_corpus`, `chunk_corpus`, `embed_corpus`, `brute_corpus`, `embed_fermi`, `_docling_client` |
+| `scripts/rag/` | answer generation | `hybrid_rag_pipeline` (class `HybridRAGPipeline`), `graph_rag_pipeline` (class `GraphRAGPipeline`, Neo4j) |
+| `scripts/rag_evaluation/` | evaluation campaign | `prepare_eval_dataset`, `prepare_eval_dataset_graph`, `rag_evaluation`, `compare_rag_runs`, `replay_retrieval` |
+| `scripts/inspect/` | stats / visualisation / exploration | `milvus_recap`, `chunk_stats`, `explore_chunks`, `explore_manifest`, `view_chunks`, `view_parsed`, `visualize_chunks`, `view_duplicates`, `av_audit`, `bench_reranker_cpu` |
 | `scripts/diagnostics/` | one-off debugging / repair | `diagnose_zero_pages`, `probe_convert`, `repair_doc`, `recover_orphan_tasks` |
 | `scripts/ops/` | connectivity & tokens | `browse`, `test_llm`, `test_milvus`, `keepalive_cleyrop`, `refresh_token_daemon` |
 
@@ -216,11 +273,13 @@ Each script carries its usage docstring at the top of the file.
 
 ## Documentation
 
-- [`docs/target-pipeline.md`](docs/target-pipeline.md) — targeted retrieval / fusion / rerank architecture
-- [`docs/reranking.md`](docs/reranking.md) — reranking work
+- [`docs/pipeline_cible.md`](docs/pipeline_cible.md) — targeted retrieval / fusion / rerank architecture
+- [`docs/reranking.md`](docs/reranking.md) — reranking topic
 - [`docs/convert-pipeline.md`](docs/convert-pipeline.md), [`docs/chunking.md`](docs/chunking.md) — ingestion steps
 - [`docs/milvus-collection.md`](docs/milvus-collection.md), [`docs/collection-fermi.md`](docs/collection-fermi.md) — Milvus collections
-- [`docs/conversion-benchmark.md`](docs/conversion-benchmark.md) — conversion benchmark
-- [`docs/rag_eval_howto.md`](docs/rag_eval_howto.md) — evaluation how-to
-- [`docs/rag_runs_catalog.md`](docs/rag_runs_catalog.md) — catalog of evaluation runs and aggregate scores
-- [`docs/run_analysis.md`](docs/run_analysis.md) — parametric study: experimental analysis of the evaluation series
+- [`docs/conversion-benchmark.md`](docs/conversion-benchmark.md), [`docs/corpus-ingere.md`](docs/corpus-ingere.md) — benchmarks & corpus status
+- [`docs/rag_eval_howto.md`](docs/rag_eval_howto.md) — practical guide to the evaluation campaign
+- [`docs/run_analysis.md`](docs/run_analysis.md) — full parametric study of the HybridRAG pipeline (5 series, champion `dbf_rrf_top50`)
+- [`docs/run_analysis_graph.md`](docs/run_analysis_graph.md) — comparative GraphRAG study (2 graphs × 3 retrieval modes)
+- [`docs/rag_runs_catalog.md`](docs/rag_runs_catalog.md) — evaluation run catalogue (parameters and reproduction commands, Hybrid + Graph)
+- [`infos-corpus.md`](infos-corpus.md) — corpus description
