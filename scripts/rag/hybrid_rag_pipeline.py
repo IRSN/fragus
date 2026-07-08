@@ -20,8 +20,6 @@ Quick start (Jupyter)::
     from hybrid_rag_pipeline import HybridRAGPipeline
 
     rag = HybridRAGPipeline()
-    # Example query against the French corpus
-    # ("What are the approval criteria for Type B packages?"):
     result = rag.ask("Quels sont les critères d'agrément des colis de type B ?")
     print(result["answer"])
     for chunk in result["chunks"]:
@@ -131,22 +129,22 @@ _KNOWN_FIELDS = {"embedding", "sparse_bm25", "sparse_fermi"}
 # ──────────────────────────────── System prompt ───────────────────────────────
 
 SYSTEM_PROMPT = """\
-You are IAGO, an intelligent assistant working for ASNR (the French Nuclear Safety and Radiation Protection Authority).
+Vous êtes IAGO, un assistant intelligent travaillant pour l'ASNR (Autorité de sûreté nucléaire et de radioprotection).
 
-### Method for answering a question
-- Start by quoting the definitions needed to understand the question.
-- In your final answer, include only elements that directly answer the question asked, with no digression: do not mention information unrelated to it.
-- Support each of your statements with reliable sources (accessible documents), indicating at the end of each sentence, statement or paragraph the reference to the sources used to produce that statement.
-- Be very careful not to confuse the different packages.
-- Cite the document and the page where the information is found.
-- Mark citations with the excerpt index in the form "[1]", "[3]", etc.
-- At the end of your answer, always list the complete set of excerpts that were useful in answering the question (excerpt number in brackets, document name, page... - Example: [1] SSR-6, page 8).
-- Use only the information present in the documentation provided to you, and nothing else. In particular, you are FORBIDDEN from guessing or from using your internal knowledge. Do not state anything that is not supported by the documentation at your disposal.
-- If you cannot find the answer in the documentation, say that you do not know; do not make anything up.
-- Always answer in French.
+### Méthode pour répondre à une question
+- Commencer par citer les définitions qui vont permettre de comprendre la question.
+- Dans votre réponse finale, n'indiquez que des éléments qui répondent directement à la question posée, pas de digression : ne mentionnez pas d'informations qui n'ont pas de rapport avec celle-ci.
+- Justifiez chacune de vos affirmations avec des sources fiables (documents accessibles) en indiquant à chaque fin de phrase, d'affirmation ou de paragraphe la référence vers les sources utilisées pour produire cette affirmation.
+- Soyez très vigilant à ne pas confondre les colis.
+- Citez le document et la page où se trouve l'information.
+- Indiquez les citations avec l'index de l'extrait sous la forme "[1]", "[3]", etc.
+- A la fin de votre réponse, indiquez systématiquement la liste complète des extraits vous ayant été utiles pour répondre à la question (numéro d'extrait entre crochets, nom du document, page... - Exemple : [1] SSR-6, page 8).
+- Utilisez seulement les informations présentes dans la documentation qui vous est fournie, et rien d'autre. En particulier, il vous est INTERDIT d'essayer de deviner, ou d'utiliser vos connaissances internes. N'affirmez rien qui ne s'appuie pas sur la documentation à votre disposition.
+- Si vous ne trouvez pas la réponse dans la documentation, indiquez que vous ne savez pas, n'inventez pas.
+- Répondez en français
 
-### Nuclear expertise
-- Package types correspond to specific models of transport packagings used for the safe transport of radioactive materials.
+### Expertise nucléaire
+- Les types de colis correspondent à des modèles spécifiques d'emballages de transport utilisés pour le transport sécurisé des matières radioactives.
 """
 
 
@@ -430,7 +428,7 @@ def _format_context(chunks: list[dict]) -> str:
     for i, chunk in enumerate(chunks, 1):
         source = chunk.get("name") or chunk.get("path") or "unknown source"
         text   = (chunk.get("text") or "").strip()
-        parts.append(f"[{i}] {text}\n    Source: {source}")
+        parts.append(f"[{i}] {text}\n    Source : {source}")
     return "\n\n".join(parts)
 
 
@@ -868,7 +866,16 @@ class HybridRAGPipeline:
                 The reranked context windows passed to the LLM, each with
                 ``rerank_score`` and the output fields.
         """
-        chunks  = self.retrieve(query, precomputed=precomputed)
+        chunks = self.retrieve(query, precomputed=precomputed)
+        return self.ask_with_chunks(query, chunks)
+
+    def ask_with_chunks(self, query: str, chunks: list[dict]) -> dict:
+        """Run ONLY the generation stage on pre-retrieved chunks.
+
+        Same prompt construction as :meth:`ask` — used to re-generate answers
+        from stored contexts (e.g. reranker-threshold variants derived from a
+        previous run's parquet) without re-running retrieval.
+        """
         context = _format_context(chunks)
 
         messages = [
@@ -876,9 +883,9 @@ class HybridRAGPipeline:
             {
                 "role": "user",
                 "content": (
-                    "Here are the relevant excerpts retrieved from the document base:\n\n"
+                    "Voici les extraits pertinents récupérés depuis la base documentaire :\n\n"
                     f"{context}\n\n"
-                    f"Question: {query}"
+                    f"Question : {query}"
                 ),
             },
         ]

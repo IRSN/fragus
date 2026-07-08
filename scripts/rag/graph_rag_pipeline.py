@@ -5,22 +5,23 @@ graph_rag_pipeline.py
 Non-agentic GraphRAG pipeline on a Neo4j graph. Three retrieval modes:
 
   flat_rrf      — BGE-M3 ANN + BM25 Lucene → RRF (k=60) → cross-encoder
-                  reranker → top-25. Schema-agnostic baseline equivalent to
-                  db_rrf_top25 on the Hybrid RAG side, but running on the
+                  reranker → top-50. Schema-agnostic baseline equivalent to
+                  db_rrf_top50 on the Hybrid RAG side, but running on the
                   Neo4j corpus. Use this as the GraphRAG internal baseline.
 
-  hybrid_cypher — BGE-M3 ANN (top-5 seeds) → 2-hop graph traversal to collect
+  hybrid_cypher — BGE-M3 ANN (top-10 seeds) → 2-hop graph traversal to collect
                   bridged Chunk nodes (passages linked via shared entities) →
-                  cross-encoder reranker → top-25. Adds graph-structural signal
+                  cross-encoder reranker → top-50. Adds graph-structural signal
                   on top of vector similarity: finds chunks that are
                   thematically related through entity paths even if not
                   vectorially close to the query (HippoRAG pattern).
 
   text2cypher   — LLM generates a Cypher query from the user question with
-                  per-query keyword-based schema pruning (SOTA exact-match
-                  approach per Neo4j 2025 research); executed directly on
+                  per-query embedding-based schema pruning (BGE-M3 cosine
+                  similarity, handles FR/EN mismatch); executed directly on
                   Neo4j; results form the LLM context. Best suited for graphs
-                  with a clean, well-named ontology.
+                  with a clean, well-named ontology. Falls back to full schema
+                  if prune_schema=False.
 
 Designed for two graph configurations:
   - static ontology  : clean pre-built schema — text2cypher works well.
@@ -45,8 +46,6 @@ Quick start::
     # Text2Cypher on a graph with a clean ontology
     rag = GraphRAGPipeline(mode="text2cypher", database="static_graph")
 
-    # Example query against the French corpus
-    # ("What are the approval criteria for Type B packages?"):
     result = rag.ask("Quels sont les critères d'agrément des colis de type B ?")
     print(result["answer"])
     rag.close()
@@ -85,25 +84,28 @@ LLM_TIMEOUT     = _LLM_CFG.get("timeout", 120.0)
 EMBEDDING_MODEL = _EMB_CFG.get("model_key", "BAAI/bge-m3")
 
 # ─── Neo4j defaults (override per experiment) ─────────────────────────────────
-# Defaults target a throwaway local Neo4j; set NEO4J_PASSWORD for anything else.
 
-NEO4J_URL         = os.getenv("NEO4J_URL", "bolt://localhost:7687")
-NEO4J_USER        = os.getenv("NEO4J_USER", "neo4j")
-NEO4J_PASSWORD    = os.getenv("NEO4J_PASSWORD", "password")
-NEO4J_DATABASE    = os.getenv("NEO4J_DATABASE", "neo4j")
+NEO4J_URL         = "bolt://localhost:7688"
+NEO4J_USER        = "neo4j"
+NEO4J_PASSWORD    = "password"
+NEO4J_DATABASE    = "neo4j"
 VECTOR_INDEX_NAME = "chunk-vector-index"
-TOP_K             = 5
+TOP_K             = 10
 TRAVERSAL_LIMIT   = 100
 
 # ─── flat_rrf defaults ────────────────────────────────────────────────────────
 
 FULLTEXT_INDEX_NAME = "chunk-text-index"
 CANDIDATES          = 100
-TOP_N               = 25
+TOP_N               = 50
 RRF_K               = 60
 RERANKER_MODEL      = "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1"
 RERANKER_DEVICE     = "cpu"
 RERANKER_URL        = os.environ.get("RERANKER_URL") or None
+
+# ─── text2cypher schema pruning ───────────────────────────────────────────────
+
+SCHEMA_TOP_K = 100  # lines kept per query when embedding-based pruning is active
 
 
 
@@ -146,22 +148,22 @@ _EXAMPLES_BLOCK = "Examples:\n{examples}\n\n"
 # ─── System prompt ────────────────────────────────────────────────────────────
 
 SYSTEM_PROMPT = """\
-You are IAGO, an intelligent assistant working for ASNR (the French Nuclear Safety and Radiation Protection Authority).
+Vous êtes IAGO, un assistant intelligent travaillant pour l'ASNR (Autorité de sûreté nucléaire et de radioprotection).
 
-### Method for answering a question
-- Start by quoting the definitions needed to understand the question.
-- In your final answer, include only elements that directly answer the question asked, with no digression: do not mention information unrelated to it.
-- Support each of your statements with reliable sources (accessible documents), indicating at the end of each sentence, statement or paragraph the reference to the sources used to produce that statement.
-- Be very careful not to confuse the different packages.
-- Cite the document and the page where the information is found.
-- Mark citations with the excerpt index in the form "[1]", "[3]", etc.
-- At the end of your answer, always list the complete set of excerpts that were useful in answering the question (excerpt number in brackets, document name, page... - Example: [1] SSR-6, page 8).
-- Use only the information present in the documentation provided to you, and nothing else. In particular, you are FORBIDDEN from guessing or from using your internal knowledge. Do not state anything that is not supported by the documentation at your disposal.
-- If you cannot find the answer in the documentation, say that you do not know; do not make anything up.
-- Always answer in French.
+### Méthode pour répondre à une question
+- Commencer par citer les définitions qui vont permettre de comprendre la question.
+- Dans votre réponse finale, n'indiquez que des éléments qui répondent directement à la question posée, pas de digression : ne mentionnez pas d'informations qui n'ont pas de rapport avec celle-ci.
+- Justifiez chacune de vos affirmations avec des sources fiables (documents accessibles) en indiquant à chaque fin de phrase, d'affirmation ou de paragraphe la référence vers les sources utilisées pour produire cette affirmation.
+- Soyez très vigilant à ne pas confondre les colis.
+- Citez le document et la page où se trouve l'information.
+- Indiquez les citations avec l'index de l'extrait sous la forme "[1]", "[3]", etc.
+- A la fin de votre réponse, indiquez systématiquement la liste complète des extraits vous ayant été utiles pour répondre à la question (numéro d'extrait entre crochets, nom du document, page... - Exemple : [1] SSR-6, page 8).
+- Utilisez seulement les informations présentes dans la documentation qui vous est fournie, et rien d'autre. En particulier, il vous est INTERDIT d'essayer de deviner, ou d'utiliser vos connaissances internes. N'affirmez rien qui ne s'appuie pas sur la documentation à votre disposition.
+- Si vous ne trouvez pas la réponse dans la documentation, indiquez que vous ne savez pas, n'inventez pas.
+- Répondez en français
 
-### Nuclear expertise
-- Package types correspond to specific models of transport packagings used for the safe transport of radioactive materials.
+### Expertise nucléaire
+- Les types de colis correspondent à des modèles spécifiques d'emballages de transport utilisés pour le transport sécurisé des matières radioactives.
 """
 
 
@@ -180,15 +182,6 @@ def _query_tokens(text: str) -> set[str]:
 
 
 _ALWAYS_KEEP = {"chunk", "from_chunk", "from_document"}
-
-
-def _prune_schema(schema: str, question: str) -> str:
-    tokens = _query_tokens(question)
-    pruned = [
-        ln for ln in schema.splitlines()
-        if _query_tokens(ln) & tokens or _query_tokens(ln) & _ALWAYS_KEEP
-    ]
-    return "\n".join(pruned) if pruned else schema
 
 
 def _extract_cypher(text: str) -> str:
@@ -216,14 +209,14 @@ class GraphRAGPipeline:
     database:
         Name of the target Neo4j database.
     mode:
-        ``"flat_rrf"``      — ANN + BM25 Lucene → RRF → reranker → top-25.
+        ``"flat_rrf"``      — ANN + BM25 Lucene → RRF → reranker → top-50.
                               GraphRAG internal baseline (no graph traversal).
-        ``"hybrid_cypher"`` — ANN seeds → 2-hop traversal → reranker → top-25.
+        ``"hybrid_cypher"`` — ANN seeds → 2-hop traversal → reranker → top-50.
         ``"text2cypher"``   — LLM-generated Cypher with per-query schema pruning.
     vector_index_name:
         BGE-M3 vector index name. Used by ``flat_rrf`` and ``hybrid_cypher``.
     top_k:
-        Number of ANN seed nodes (``hybrid_cypher`` only). Default: 5.
+        Number of ANN seed nodes (``hybrid_cypher`` only). Default: 10.
     traversal_limit:
         Maximum number of bridged chunks collected by the 2-hop traversal
         (``hybrid_cypher`` only). Default: 100.
@@ -231,8 +224,12 @@ class GraphRAGPipeline:
         Few-shot (question, cypher) pairs for ``text2cypher`` mode.
         Each entry must be a dict with keys ``"question"`` and ``"cypher"``.
     prune_schema:
-        Enable per-query exact-match keyword schema pruning (``text2cypher``).
-        SOTA approach per Neo4j 2025 research. Default: True.
+        Enable per-query embedding-based schema pruning (``text2cypher``).
+        Uses BGE-M3 cosine similarity — handles FR/EN mismatch, works on very
+        large schemas (10 K+ lines). Default: True.
+    schema_top_k:
+        Number of schema lines kept per query when embedding pruning is active.
+        Default: 100.
     llm_model_key:
         Cleyrop proxy model key for generation (and Cypher generation in
         ``text2cypher`` mode).
@@ -257,6 +254,7 @@ class GraphRAGPipeline:
         traversal_limit: int            = TRAVERSAL_LIMIT,
         cypher_examples: Optional[list] = None,
         prune_schema: bool              = True,
+        schema_top_k: int               = SCHEMA_TOP_K,
         llm_model_key: str              = LLM_MODEL_KEY,
         llm_max_tokens: int             = LLM_MAX_TOKENS,
         llm_timeout: float              = LLM_TIMEOUT,
@@ -275,14 +273,15 @@ class GraphRAGPipeline:
                 f"mode must be 'text2cypher', 'hybrid_cypher' or 'flat_rrf', got {mode!r}"
             )
 
-        self.mode            = mode
-        self.database        = database
-        self.top_k           = top_k
-        self.traversal_limit = traversal_limit
-        self.vector_index    = vector_index_name
-        self.prune_schema    = prune_schema
-        self.system_prompt   = system_prompt
-        self._examples       = cypher_examples or []
+        self.mode             = mode
+        self.database         = database
+        self.top_k            = top_k
+        self.traversal_limit  = traversal_limit
+        self.vector_index     = vector_index_name
+        self.prune_schema     = prune_schema
+        self._schema_top_k    = schema_top_k
+        self.system_prompt    = system_prompt
+        self._examples        = cypher_examples or []
 
         # flat_rrf
         self._fulltext_index = fulltext_index_name
@@ -316,13 +315,17 @@ class GraphRAGPipeline:
             timeout=llm_timeout,
         )
 
+        # Build embedder for all modes that need it
+        if mode in ("hybrid_cypher", "flat_rrf") or (mode == "text2cypher" and prune_schema):
+            self._embed = self._build_embedder()
+
         if mode == "text2cypher":
             _log.info("Fetching Neo4j schema for database '%s'…", database)
             self._schema = self._fetch_schema()
-            _log.info("Schema fetched (%d chars).", len(self._schema))
-
-        if mode in ("hybrid_cypher", "flat_rrf"):
-            self._embed = self._build_embedder()
+            self._schema_lines = [ln for ln in self._schema.splitlines() if ln.strip()]
+            _log.info("Schema fetched (%d lines).", len(self._schema_lines))
+            if prune_schema and self._schema_lines:
+                self._build_schema_index()
 
         if mode in ("flat_rrf", "hybrid_cypher"):
             if reranker_url:
@@ -378,16 +381,72 @@ class GraphRAGPipeline:
                 + "\nRelationship types: " + ", ".join(rels)
             )
 
-    # ── Embedder (hybrid_cypher) ──────────────────────────────────────────────
+    # ── Embedder ──────────────────────────────────────────────────────────────
 
     def _build_embedder(self):
         from scripts.rag.hybrid_rag_pipeline import _build_embedding_client
-        oai_client, model_name = _build_embedding_client(_PROXY_PREFIX, EMBEDDING_MODEL)
+        self._emb_client, self._emb_model = _build_embedding_client(_PROXY_PREFIX, EMBEDDING_MODEL)
 
         def embed(text: str) -> list[float]:
-            return oai_client.embeddings.create(model=model_name, input=[text]).data[0].embedding
+            return self._emb_client.embeddings.create(
+                model=self._emb_model, input=[text]
+            ).data[0].embedding
 
         return embed
+
+    def _embed_batch(self, texts: list[str], batch_size: int = 64) -> "np.ndarray":
+        import numpy as np
+        all_embs: list[list[float]] = []
+        for i in range(0, len(texts), batch_size):
+            batch = texts[i : i + batch_size]
+            resp = self._emb_client.embeddings.create(model=self._emb_model, input=batch)
+            sorted_data = sorted(resp.data, key=lambda d: d.index)
+            all_embs.extend(d.embedding for d in sorted_data)
+        return np.array(all_embs, dtype="float32")
+
+    # ── Embedding-based schema index (text2cypher) ────────────────────────────
+
+    def _build_schema_index(self) -> None:
+        import numpy as np
+        from tqdm import tqdm as _tqdm
+
+        lines = self._schema_lines
+        n = len(lines)
+        _log.info("Building schema embedding index (%d lines)…", n)
+        batch_size = 64
+        all_embs: list[list[float]] = []
+        for i in _tqdm(range(0, n, batch_size), desc="Schema index", unit="batch"):
+            batch = lines[i : i + batch_size]
+            resp = self._emb_client.embeddings.create(model=self._emb_model, input=batch)
+            sorted_data = sorted(resp.data, key=lambda d: d.index)
+            all_embs.extend(d.embedding for d in sorted_data)
+        embs = np.array(all_embs, dtype="float32")
+        norms = np.linalg.norm(embs, axis=1, keepdims=True)
+        self._schema_embs = embs / np.maximum(norms, 1e-9)
+        _log.info("Schema index ready.")
+
+    def _embed_prune_schema(self, question: str) -> str:
+        import numpy as np
+
+        lines = self._schema_lines
+        if not lines:
+            return self._schema
+        if self._schema_top_k >= len(lines):
+            return self._schema
+
+        q_emb = np.array(self._embed(question), dtype="float32")
+        q_emb /= max(float(np.linalg.norm(q_emb)), 1e-9)
+        scores = self._schema_embs @ q_emb
+        top_indices = set(np.argsort(scores)[::-1][: self._schema_top_k].tolist())
+
+        # Always keep lines that mention structural elements
+        for idx, ln in enumerate(lines):
+            if _query_tokens(ln) & _ALWAYS_KEEP:
+                top_indices.add(idx)
+
+        kept = sorted(top_indices)
+        _log.debug("Schema pruned: %d/%d lines kept for this query.", len(kept), len(lines))
+        return "\n".join(lines[i] for i in kept)
 
     # ── Retrieval ─────────────────────────────────────────────────────────────
 
@@ -400,7 +459,7 @@ class GraphRAGPipeline:
         return self._retrieve_hybrid_cypher(question)
 
     def _retrieve_text2cypher(self, question: str) -> list[dict]:
-        schema = _prune_schema(self._schema, question) if self.prune_schema else self._schema
+        schema = self._embed_prune_schema(question) if self.prune_schema else self._schema
 
         examples_block = ""
         if self._examples:
@@ -580,12 +639,12 @@ class GraphRAGPipeline:
 
     def _format_context(self, items: list[dict]) -> str:
         if not items:
-            return "(no context retrieved)"
+            return "(aucun contexte récupéré)"
         parts = []
         for i, item in enumerate(items, 1):
             text   = (item.get("text") or "").strip()
             source = item.get("name") or item.get("source", "").split("/")[-1] or "unknown source"
-            parts.append(f"[{i}] {text}\n    Source: {source}")
+            parts.append(f"[{i}] {text}\n    Source : {source}")
         return "\n\n".join(parts)
 
     def ask(self, question: str) -> dict[str, Any]:
@@ -595,7 +654,7 @@ class GraphRAGPipeline:
 
         messages = [
             SystemMessage(content=self.system_prompt),
-            HumanMessage(content=f"Context:\n{context_str}\n\nQuestion: {question}"),
+            HumanMessage(content=f"Contexte :\n{context_str}\n\nQuestion : {question}"),
         ]
         response = self._llm.invoke(messages)
         answer = response.content if hasattr(response, "content") else str(response)
