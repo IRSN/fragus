@@ -183,7 +183,9 @@ class LLMConfig:
     # intermediate output (claim lists, verdicts); 2048 truncates them
     # mid-JSON and the metric fails to parse the result.
     max_tokens: int = 8192
-    timeout: float = 120.0
+    # 300 s: anchoring prompts on large contexts (top-100 → ~45k tokens) can
+    # exceed 120 s on the fallback backend without being stuck.
+    timeout: float = 300.0
     # SDK-level retries are disabled (max_retries=0): the proxy returns two
     # distinct 429 flavours that need different handling —
     #   "N requests per minute exceeded" : recoverable → sleep 65 s, retry × 3
@@ -313,7 +315,15 @@ class _FallbackChatModel:
     def _active(self):
         return self._clients[self._idx]
 
-    def _try_next(self, e: Exception) -> bool:
+    def _should_retry(self, e: Exception, used_idx: int) -> bool:
+        """Decide whether a failed call may be retried on the current provider.
+
+        Handles the concurrent-switch race: if another in-flight call already
+        advanced ``_idx`` past ``used_idx``, retry on the new active provider
+        instead of giving up.
+        """
+        if self._idx != used_idx:
+            return True  # someone else already switched — retry on new provider
         if _is_daily_quota_error(e) and self._idx < len(self._clients) - 1:
             old = self._labels[self._idx]
             self._idx += 1
@@ -323,61 +333,45 @@ class _FallbackChatModel:
             return True
         return False
 
-    def invoke(self, prompt):
-        for _ in self._clients:
+    def _call(self, method: str, *args, **kwargs):
+        for _ in range(len(self._clients) + 1):
+            used = self._idx
             try:
-                return self._active().invoke(prompt)
+                return getattr(self._clients[used], method)(*args, **kwargs)
             except Exception as e:
-                if not self._try_next(e):
+                if not self._should_retry(e, used):
                     raise
         raise RuntimeError("All LLM providers exhausted.")
 
-    async def ainvoke(self, prompt):
-        for _ in self._clients:
+    async def _acall(self, method: str, *args, **kwargs):
+        for _ in range(len(self._clients) + 1):
+            used = self._idx
             try:
-                return await self._active().ainvoke(prompt)
+                return await getattr(self._clients[used], method)(*args, **kwargs)
             except Exception as e:
-                if not self._try_next(e):
+                if not self._should_retry(e, used):
                     raise
         raise RuntimeError("All LLM providers exhausted.")
+
+    def invoke(self, prompt):
+        return self._call("invoke", prompt)
+
+    async def ainvoke(self, prompt):
+        return await self._acall("ainvoke", prompt)
 
     # ---- LangChain generation interface (used by LangchainLLMWrapper) ------
 
     def _generate(self, messages, stop=None, run_manager=None, **kwargs):
-        for _ in self._clients:
-            try:
-                return self._active()._generate(messages, stop=stop, run_manager=run_manager, **kwargs)
-            except Exception as e:
-                if not self._try_next(e):
-                    raise
-        raise RuntimeError("All LLM providers exhausted.")
+        return self._call("_generate", messages, stop=stop, run_manager=run_manager, **kwargs)
 
     async def _agenerate(self, messages, stop=None, run_manager=None, **kwargs):
-        for _ in self._clients:
-            try:
-                return await self._active()._agenerate(messages, stop=stop, run_manager=run_manager, **kwargs)
-            except Exception as e:
-                if not self._try_next(e):
-                    raise
-        raise RuntimeError("All LLM providers exhausted.")
+        return await self._acall("_agenerate", messages, stop=stop, run_manager=run_manager, **kwargs)
 
     def generate_prompt(self, *args, **kwargs):
-        for _ in self._clients:
-            try:
-                return self._active().generate_prompt(*args, **kwargs)
-            except Exception as e:
-                if not self._try_next(e):
-                    raise
-        raise RuntimeError("All LLM providers exhausted.")
+        return self._call("generate_prompt", *args, **kwargs)
 
     async def agenerate_prompt(self, *args, **kwargs):
-        for _ in self._clients:
-            try:
-                return await self._active().agenerate_prompt(*args, **kwargs)
-            except Exception as e:
-                if not self._try_next(e):
-                    raise
-        raise RuntimeError("All LLM providers exhausted.")
+        return await self._acall("agenerate_prompt", *args, **kwargs)
 
 
 def build_llm(cfg: LLMConfig, verbose: bool = True):
@@ -493,6 +487,19 @@ def load_dataset(
 
     rename = {src: canon for canon, src in colmap.items() if src in df.columns}
     df = df.rename(columns=rename)
+
+    # Full contexts sidecar: the Excel cell caps at 32 767 chars (long contexts get
+    # truncated there); prepare_eval_dataset*.py writes the complete version to a
+    # parquet next to the Excel. Prefer it whenever present.
+    _p = Path(str(path))
+    pq_path = _p.with_name(_p.stem + "_contexts.parquet")
+    if pq_path.exists() and "q_id" in df.columns:
+        full = pd.read_parquet(pq_path)
+        mapping = dict(zip(full["q_id"].astype(str), full["retrieved_contexts"]))
+        mapped = df["q_id"].astype(str).map(mapping)
+        mask = mapped.notna()
+        df.loc[mask, "retrieved_contexts"] = mapped[mask]
+        print(f"[load] Full contexts from {pq_path.name} ({int(mask.sum())}/{len(df)} rows)")
 
     required = ("user_input", "response", "reference", "retrieved_contexts")
     missing = [c for c in required if c not in df.columns]
@@ -862,7 +869,7 @@ def diversity_score(contexts: Sequence[str], raw_embeddings) -> float:
     Diversity = 1 - (mean cosine similarity over all pairs of retrieved
     chunks). High = complementary chunks; low = near-duplicates.
     """
-    _MAX_CHARS = 15000  # conservative: worst-case ~2.4 chars/tok → ~6250 tokens, safely under bge-multilingual-gemma2's 8192-token limit
+    _MAX_CHARS = 10000  # ~5600 tokens at ~1.78 chars/tok (French regulatory text), safely under the 8192-token embedding limit
     ctx = [str(c)[:_MAX_CHARS] for c in contexts if str(c).strip()]
     if len(ctx) < 2:
         return float("nan")
@@ -1281,6 +1288,7 @@ def evaluate(
             if verbose:
                 print(f"[anchoring] factual decomposition ({len(pending)}/{len(df_eval)} pending, LLM) ...")
             pbar_anchor = tqdm(total=len(pending), desc="anchoring")
+            anchor_sem = _asyncio.Semaphore(ragas_workers)
 
             async def _anchor_one(idx):
                 r = df_eval.loc[idx]
@@ -1291,7 +1299,16 @@ def evaluate(
                 )
                 counts = {c: 0 for c in _ANCHOR_CATEGORIES}
                 try:
-                    data = _extract_json(await _llm_invoke_text_async(llm_wrapper, prompt))
+                    async with anchor_sem:
+                        # Long-context judge calls occasionally return malformed
+                        # JSON — resample up to 3 times before giving up.
+                        for _attempt in range(3):
+                            try:
+                                data = _extract_json(await _llm_invoke_text_async(llm_wrapper, prompt))
+                                break
+                            except (ValueError, json.JSONDecodeError):
+                                if _attempt == 2:
+                                    raise
                     for f in data.get("facts", []):
                         cat = f.get("category")
                         if cat in counts:

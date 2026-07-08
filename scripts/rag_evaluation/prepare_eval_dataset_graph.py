@@ -13,7 +13,7 @@ Usage:
 
 Supported modes:
   flat_rrf        ANN (BGE-M3) + BM25 Lucene → RRF → cross-encoder → top-25
-  hybrid_cypher   ANN seeds → 2-hop graph traversal → cross-encoder → top-25
+  hybrid_cypher   ANN → BFS graph traversal (1-hop or 2-hop)
   text2cypher     LLM-generated Cypher query
 """
 
@@ -37,6 +37,7 @@ from scripts.rag.graph_rag_pipeline import (
     NEO4J_URL,
     NEO4J_USER,
     RRF_K,
+    SCHEMA_TOP_K,
     TOP_K,
     TOP_N,
     VECTOR_INDEX_NAME,
@@ -55,7 +56,9 @@ from scripts.rag_evaluation.prepare_eval_dataset import (
     _fill_rag_result,
     _generate_paraphrases,
     _is_paraphrase,
+    load_full_contexts,
     parse_reference_files,
+    save_eval_outputs,
 )
 
 
@@ -112,7 +115,9 @@ def main() -> None:
     ap.add_argument("--mode", default="flat_rrf",
                     choices=["flat_rrf", "hybrid_cypher", "text2cypher"])
     ap.add_argument("--no-prune-schema", action="store_true", dest="no_prune_schema",
-                    help="Disable schema pruning for text2cypher (recommended for non-English questions).")
+                    help="Disable schema pruning entirely (passes full schema to the LLM — unsafe on large graphs).")
+    ap.add_argument("--schema-top-k", type=int, default=SCHEMA_TOP_K, dest="schema_top_k",
+                    help=f"Schema lines kept per query when embedding pruning is active (default: {SCHEMA_TOP_K}).")
 
     # flat_rrf params
     ap.add_argument("--vector-index",   default=VECTOR_INDEX_NAME, dest="vector_index")
@@ -168,6 +173,7 @@ def main() -> None:
             qid = str(r.get("q_id", "")).strip()
             by_qid[qid] = r.to_dict()
         rows = dict(by_qid)
+        load_full_contexts(rows, output_path)  # restore full contexts from parquet sidecar
         existing_variant_count: dict[str, int] = {}
         for r in by_qid.values():
             if _is_paraphrase(r.get("is_paraphrase")):
@@ -199,6 +205,7 @@ def main() -> None:
         mode=args.mode,
         vector_index_name=args.vector_index,
         prune_schema=not args.no_prune_schema,
+        schema_top_k=args.schema_top_k,
     )
     if args.mode == "flat_rrf":
         pipeline_kwargs.update(
@@ -274,7 +281,7 @@ def main() -> None:
                 rows[var_id] = var_row
 
         # Save after each question (resume-safe)
-        pd.DataFrame(list(rows.values())).to_excel(output_path, index=False)
+        save_eval_outputs(rows, output_path)
 
     rag.close()
 
